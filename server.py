@@ -11,7 +11,10 @@ app = FastAPI()
 
 # --- CẤU HÌNH API KEY ---
 # Nhập API Key Gemini (Bảo mật: Lấy từ biến môi trường khi đưa lên Cloud)
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "AQ.Ab8RN6IlT5SCdw04uoRutct_5JWODtxY76P19WKarVFZt7K0QQ")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    print("[!] CẢNH BÁO: Chưa cấu hình GEMINI_API_KEY trong Environment Variables!")
+
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
