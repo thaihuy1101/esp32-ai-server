@@ -85,16 +85,16 @@ async def chat(request: Request):
             messages.append({"role": chat["role"], "content": chat["content"]})
         messages.append({"role": "user", "content": user_text_raw})
         
-        print("[*] Đang gửi lên Groq Llama 3...")
+        print("[*] Đang gửi lên Groq Qwen...")
         completion = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model="qwen/qwen3.8-27b",
             messages=messages,
             temperature=0.7,
             max_tokens=150
         )
         
         tts_text = completion.choices[0].message.content.strip()
-        print(f"[*] Llama 3 phản hồi: {tts_text}")
+        print(f"[*] Qwen phản hồi: {tts_text}")
         
         # Lưu vào lịch sử
         chat_history.append({"role": "user", "content": user_text_raw})
