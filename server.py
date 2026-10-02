@@ -24,7 +24,7 @@ try:
 except Exception as e:
     print(f"[!] Lỗi khi lấy danh sách model: {e}")
 
-model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-2.5-flash')
 
 
 
