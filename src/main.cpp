@@ -672,6 +672,11 @@ void loop() {
               delay(200); 
               currentState = STATE_LISTENING; 
           }
+      } else if (httpCode == 204) {
+          // Im lặng, máy chủ bỏ qua (ảo giác âm thanh)
+          Serial.println("Silence detected, server returned 204.");
+          currentState = STATE_IDLE; forceUIUpdate = true;
+          eyeHeight = 60;
       } else {
           tft.fillScreen(COLOR_BG);
           drawChatUI("Loi ket noi Server", String(httpCode).c_str());

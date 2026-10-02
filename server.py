@@ -42,7 +42,8 @@ async def get_real_weather():
     # Lấy thời tiết thực tế tại Biên Hòa, Đồng Nai
     try:
         async with httpx.AsyncClient() as http_client:
-            resp = await http_client.get("https://api.open-meteo.com/v1/forecast?latitude=10.9482&longitude=106.8283&current_weather=true", timeout=10.0)
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            resp = await http_client.get("https://api.open-meteo.com/v1/forecast?latitude=10.9482&longitude=106.8283&current_weather=true", headers=headers, timeout=10.0)
             data = resp.json()
             cw = data["current_weather"]
             temp = cw["temperature"]
@@ -83,8 +84,21 @@ async def chat(request: Request):
         user_text_raw = transcription.text.strip()
         print(f"[*] Người dùng nói: {user_text_raw}")
         
+        # Lọc các trường hợp im lặng bị Whisper ảo giác
+        text_lower = user_text_raw.lower()
+        hallucinations = [
+            "xin chào", "cảm ơn", "tạm biệt", "hẹn gặp lại", 
+            "đăng ký kênh", "theo dõi", "subscribe", "subtitles", "chào các bạn"
+        ]
+        
+        # Nếu chuỗi quá ngắn hoặc nằm trong danh sách ảo giác phổ biến của Whisper
+        if len(user_text_raw) < 2 or any(h == text_lower.strip() or h in text_lower for h in hallucinations):
+            if len(user_text_raw) < 15: # Tránh lọc nhầm câu nói thật có chữ "xin chào" dài
+                print("[*] Bỏ qua vì phát hiện ảo giác âm thanh (im lặng).")
+                return Response(status_code=204) # 204 No Content
+        
         if not user_text_raw:
-            user_text_raw = "Xin chào"
+            return Response(status_code=204)
             
         system_prompt = (
             f"Bạn là trợ lý ảo AI thông minh, vui tính và đáng yêu.\n"
