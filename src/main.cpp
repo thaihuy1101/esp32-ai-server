@@ -18,6 +18,8 @@ DHT dht(DHTPIN, DHTTYPE);
 float currentTemp = 0.0;
 float currentHum = 0.0;
 unsigned long lastDhtTime = 0;
+bool forceUIUpdate = true;
+
 
 #include <AudioFileSourcePROGMEM.h>
 #include <HTTPClient.h>
@@ -190,6 +192,17 @@ void drawEyes() {
   static bool isBlinking = false;
   static unsigned long blinkTime = 0;
 
+  static float lastPrintedTemp = -999.0;
+  static float lastPrintedHum = -999.0;
+  bool isPanelRedrawNeeded = false;
+
+  if (forceUIUpdate) {
+    needsRedraw = true;
+    isPanelRedrawNeeded = true;
+    tft.fillScreen(COLOR_BG);
+    forceUIUpdate = false;
+  }
+
   // Xử lý nháy mắt (Mắt nhắm lại rồi mở ra sau 150ms)
   if (isBlinking && millis() - blinkTime > 150) {
     isBlinking = false;
@@ -203,7 +216,6 @@ void drawEyes() {
     int action = random(100);
     
     if (action < 40) {
-      // 40% cơ hội nháy mắt
       isBlinking = true;
       blinkTime = millis();
       currentH = 10;
@@ -217,33 +229,54 @@ void drawEyes() {
     needsRedraw = true;
   }
 
-  // CHỈ vẽ lại khi có sự thay đổi (để chống lỗi giật/sọc màn hình)
-  if (needsRedraw || millis() - lastDhtTime > 5000) {
-    if (millis() - lastDhtTime > 5000) {
-      lastDhtTime = millis();
-      float t = dht.readTemperature();
-      float h = dht.readHumidity();
-      if (!isnan(t) && !isnan(h)) {
-        currentTemp = t;
-        currentHum = h;
+  // Cập nhật DHT
+  if (millis() - lastDhtTime > 5000) {
+    lastDhtTime = millis();
+    float t = dht.readTemperature();
+    float h = dht.readHumidity();
+    if (!isnan(t) && !isnan(h)) {
+      if (t != currentTemp || h != currentHum) {
+         currentTemp = t;
+         currentHum = h;
       }
     }
+  }
+  
+  if (currentTemp != lastPrintedTemp || currentHum != lastPrintedHum) {
+      isPanelRedrawNeeded = true;
+  }
 
-    tft.fillScreen(COLOR_BG); // Xóa sạch màn hình một lần
-    
-    // Vẽ mắt xích lên trên một chút (tâm là 90 thay vì 120)
-    tft.fillRoundRect(currentX, 90 - (currentH/2), 50, currentH, 15, COLOR_EYE);
-    tft.fillRoundRect(currentX + 90, 90 - (currentH/2), 50, currentH, 15, COLOR_EYE);
-    
-    // Vẽ nhiệt độ và độ ẩm ở dưới cùng
-    if (currentTemp > 0.0) {
-      tft.setFont(&FreeSans9pt7b);
-      tft.setTextColor(0xFFFF); // Màu trắng
-      tft.setCursor(15, 215);
-      tft.printf("Nhiet do: %.1fC - Do am: %.1f%%", currentTemp, currentHum);
-    }
-    
+  // Vẽ mắt (chỉ xóa cục bộ khu vực mắt để không giật panel)
+  if (needsRedraw) {
+    tft.fillRect(0, 0, 240, 140, COLOR_BG); // Xóa nửa trên
+    tft.fillRoundRect(currentX, 70 - (currentH/2), 50, currentH, 15, COLOR_EYE);
+    tft.fillRoundRect(currentX + 90, 70 - (currentH/2), 50, currentH, 15, COLOR_EYE);
     needsRedraw = false;
+  }
+
+  // Vẽ Panel thông tin (2 dòng riêng biệt, có icon)
+  if (isPanelRedrawNeeded && currentTemp > 0.0) {
+    lastPrintedTemp = currentTemp;
+    lastPrintedHum = currentHum;
+    
+    // Nền panel (Xám đậm)
+    tft.fillRoundRect(10, 145, 220, 85, 12, 0x2104);
+    
+    tft.setFont(&FreeSans9pt7b);
+    
+    // --- DÒNG 1: NHIỆT ĐỘ ---
+    tft.fillCircle(40, 175, 7, 0xF800); // Bầu nhiệt kế (Đỏ)
+    tft.fillRoundRect(37, 158, 7, 17, 3, 0xF800); // Ống nhiệt kế
+    tft.setTextColor(0xFFE0); // Vàng
+    tft.setCursor(65, 175);
+    tft.printf("%.1f C", currentTemp);
+
+    // --- DÒNG 2: ĐỘ ẨM ---
+    tft.fillCircle(40, 212, 7, 0x051D); // Giọt nước (Xanh dương)
+    tft.fillTriangle(33, 212, 47, 212, 40, 198, 0x051D);
+    tft.setTextColor(0x07E0); // Xanh lá
+    tft.setCursor(65, 215);
+    tft.printf("%.1f %%", currentHum);
   }
 }
 
@@ -462,7 +495,7 @@ void loop() {
         drawChatUI("Loi", "Khong du RAM!");
         delay(2000);
         tft.fillScreen(COLOR_BG);
-        currentState = STATE_IDLE;
+        currentState = STATE_IDLE; forceUIUpdate = true;
         eyeHeight = 60;
         break;
       }
@@ -543,7 +576,7 @@ void loop() {
         // Nếu quá thời gian, hoặc người dùng chưa nói gì cả thì HỦY
         free(wav_buffer);
         tft.fillScreen(COLOR_BG);
-        currentState = STATE_IDLE;
+        currentState = STATE_IDLE; forceUIUpdate = true;
         break;
       }
 
@@ -556,7 +589,7 @@ void loop() {
       for(int i=0; i<15; i++) { drawEQBars(0); delay(20); }
       
       WiFiClientSecure client;
-      client.setInsecure();
+      client.setInsecure(); client.setTimeout(60);
       
       HTTPClient http;
       http.begin(client, SERVER_URL);
@@ -634,7 +667,7 @@ void loop() {
           if (uLow.indexOf("tam biet") >= 0 || uLow.indexOf("cam on") >= 0 || 
               sLow.indexOf("tam biet") >= 0 || sLow.indexOf("cam on") >= 0) {
               tft.fillScreen(COLOR_BG); 
-              currentState = STATE_IDLE; 
+              currentState = STATE_IDLE; forceUIUpdate = true; 
           } else {
               delay(200); 
               currentState = STATE_LISTENING; 
@@ -643,7 +676,7 @@ void loop() {
           tft.fillScreen(COLOR_BG);
           drawChatUI("Loi ket noi Server", String(httpCode).c_str());
           delay(3000);
-          currentState = STATE_IDLE;
+          currentState = STATE_IDLE; forceUIUpdate = true;
           eyeHeight = 60;
       }
       http.end();
