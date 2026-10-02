@@ -16,7 +16,8 @@ if not GEMINI_API_KEY:
     print("[!] CẢNH BÁO: Chưa cấu hình GEMINI_API_KEY trong Environment Variables!")
 
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-1.5-flash-latest')
+
 
 # Biến lưu trữ lịch sử trò chuyện tạm thời
 chat_history = ""
