@@ -9,6 +9,16 @@
 #include <AudioGeneratorMP3.h>
 #include <WiFiManager.h>
 #include <AudioOutputI2S.h>
+#include <DHT.h>
+
+#define DHTPIN 7
+#define DHTTYPE DHT11
+DHT dht(DHTPIN, DHTTYPE);
+
+float currentTemp = 0.0;
+float currentHum = 0.0;
+unsigned long lastDhtTime = 0;
+
 #include <AudioFileSourcePROGMEM.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
@@ -64,7 +74,7 @@ i2s_pin_config_t i2s_mic_pins = {
 #define TOUCH_PIN 14
 
 // --- Cấu hình Biến trở Âm lượng ---
-#define USE_POTENTIOMETER false // Bật/tắt tính năng chỉnh âm lượng vật lý
+#define USE_POTENTIOMETER true // Bật/tắt tính năng chỉnh âm lượng vật lý
 #define POT_PIN 10              // Chân cắm biến trở (ADC)
 
 SPIClass fspi(FSPI);
@@ -208,10 +218,31 @@ void drawEyes() {
   }
 
   // CHỈ vẽ lại khi có sự thay đổi (để chống lỗi giật/sọc màn hình)
-  if (needsRedraw) {
+  if (needsRedraw || millis() - lastDhtTime > 5000) {
+    if (millis() - lastDhtTime > 5000) {
+      lastDhtTime = millis();
+      float t = dht.readTemperature();
+      float h = dht.readHumidity();
+      if (!isnan(t) && !isnan(h)) {
+        currentTemp = t;
+        currentHum = h;
+      }
+    }
+
     tft.fillScreen(COLOR_BG); // Xóa sạch màn hình một lần
-    tft.fillRoundRect(currentX, 120 - (currentH/2), 50, currentH, 15, COLOR_EYE);
-    tft.fillRoundRect(currentX + 90, 120 - (currentH/2), 50, currentH, 15, COLOR_EYE);
+    
+    // Vẽ mắt xích lên trên một chút (tâm là 90 thay vì 120)
+    tft.fillRoundRect(currentX, 90 - (currentH/2), 50, currentH, 15, COLOR_EYE);
+    tft.fillRoundRect(currentX + 90, 90 - (currentH/2), 50, currentH, 15, COLOR_EYE);
+    
+    // Vẽ nhiệt độ và độ ẩm ở dưới cùng
+    if (currentTemp > 0.0) {
+      tft.setFont(&FreeSans9pt7b);
+      tft.setTextColor(0xFFFF); // Màu trắng
+      tft.setCursor(15, 215);
+      tft.printf("Nhiet do: %.1fC - Do am: %.1f%%", currentTemp, currentHum);
+    }
+    
     needsRedraw = false;
   }
 }
@@ -344,7 +375,7 @@ void createWavHeader(byte* header, int waveDataSize){
 }
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(115200); dht.begin();
   pinMode(TOUCH_PIN, INPUT);
   if (USE_POTENTIOMETER) pinMode(POT_PIN, INPUT);
 
@@ -531,6 +562,8 @@ void loop() {
       http.begin(client, SERVER_URL);
       http.setTimeout(60000); // Tăng thời gian chờ lên 60 giây (Mặc định 5s là quá ngắn)
       http.addHeader("Content-Type", "application/octet-stream");
+      http.addHeader("X-Temperature", String(currentTemp));
+      http.addHeader("X-Humidity", String(currentHum));
       
       const char * headerKeys[] = {"X-User-Text", "X-Screen-Text"};
       http.collectHeaders(headerKeys, 2);
