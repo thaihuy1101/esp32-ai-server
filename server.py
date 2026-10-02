@@ -42,13 +42,14 @@ async def get_real_weather():
     # Lấy thời tiết thực tế tại Biên Hòa, Đồng Nai
     try:
         async with httpx.AsyncClient() as http_client:
-            resp = await http_client.get("https://api.open-meteo.com/v1/forecast?latitude=10.9482&longitude=106.8283&current_weather=true", timeout=3.0)
+            resp = await http_client.get("https://api.open-meteo.com/v1/forecast?latitude=10.9482&longitude=106.8283&current_weather=true", timeout=10.0)
             data = resp.json()
             cw = data["current_weather"]
             temp = cw["temperature"]
             condition = parse_weather(cw["weathercode"])
             return f"{temp}°C, {condition}"
     except Exception as e:
+        print(f"[!] Lỗi khi lấy thời tiết ngoài trời: {e}")
         return "không lấy được dữ liệu"
 
 @app.post("/chat")
