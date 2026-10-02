@@ -47,12 +47,12 @@ async def chat(request: Request):
         
         # Lấy ngày giờ hiện tại
         days = ["Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy", "Chủ Nhật"]
-        now_dt = datetime.datetime.now()
+        now_dt = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
         now_str = f"{now_dt.strftime('%H:%M:%S')} {days[now_dt.weekday()]} ngày {now_dt.strftime('%d/%m/%Y')}"
         
         # 2. Xây dựng Prompt và gửi lên Gemini AI
         prompt = (
-            f"Bạn là một người bạn và trợ lý ảo thông minh. THÔNG TIN QUAN TRỌNG: Ngay lúc này là {now_str}. Hãy dùng thông tin này để trả lời các câu hỏi về ngày tháng.\n"
+            f"Bạn là một người bạn và trợ lý ảo thông minh. THÔNG TIN QUAN TRỌNG: Ngay lúc này là {now_str}. Vị trí hiện tại của tôi là Biên Hòa, Đồng Nai. Hãy dùng thông tin này để trả lời các câu hỏi về ngày tháng, giờ giấc và thời tiết.\n"
             f"Dưới đây là lịch sử trò chuyện:\n{chat_history}\n"
             "Hãy nghe đoạn âm thanh tiếp theo của tôi. BẮT BUỘC chỉ trả về đúng 1 chuỗi theo định dạng: "
             "Câu tôi nói|Câu bạn trả lời\n"
