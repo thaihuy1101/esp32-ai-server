@@ -16,7 +16,16 @@ if not GEMINI_API_KEY:
     print("[!] CẢNH BÁO: Chưa cấu hình GEMINI_API_KEY trong Environment Variables!")
 
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash-latest')
+try:
+    print("[*] Danh sách các Model được hỗ trợ:")
+    for m in genai.list_models():
+        if 'generateContent' in m.supported_generation_methods:
+            print(f" - {m.name}")
+except Exception as e:
+    print(f"[!] Lỗi khi lấy danh sách model: {e}")
+
+model = genai.GenerativeModel('gemini-1.5-flash')
+
 
 
 # Biến lưu trữ lịch sử trò chuyện tạm thời
