@@ -5,3 +5,5 @@ gTTS==2.5.3
 pydantic==2.9.2
 starlette==0.38.6
 groq
+edge-tts
+httpx

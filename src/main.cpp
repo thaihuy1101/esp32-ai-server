@@ -365,7 +365,7 @@ void drawListeningUI(const char* lastAiText, const char* topStatus) {
     if (bubH > 90) bubH = 90; // Giới hạn chiều cao bong bóng để nhường chỗ cho cực quang
     
     tft.fillRoundRect(10, 40, 220, bubH, 20, COLOR_AI_BUB);
-    printText("Gemini:", 20, 58, COLOR_WHITE, &FreeSans9pt7b);
+    printText("Qwen:", 20, 58, COLOR_WHITE, &FreeSans9pt7b);
     printMultilineText(lastAiText, 20, 78, COLOR_WHITE, &FreeSans9pt7b, 200, 40 + bubH - 5);
   } else {
     // Giao diện tĩnh lặng giống Gemini Live
