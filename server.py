@@ -19,6 +19,9 @@ if not GROQ_API_KEY:
 try:
     client = Groq(api_key=GROQ_API_KEY)
     print("[*] Groq API khởi tạo thành công!")
+    print("[*] Danh sách các Model được hỗ trợ (Groq):")
+    for m in client.models.list().data:
+        print(f" - {m.id}")
 except Exception as e:
     print(f"[!] Lỗi khởi tạo Groq: {e}")
 
@@ -84,7 +87,7 @@ async def chat(request: Request):
         
         print("[*] Đang gửi lên Groq Llama 3...")
         completion = client.chat.completions.create(
-            model="llama3-8b-8192",
+            model="llama-3.1-8b-instant",
             messages=messages,
             temperature=0.7,
             max_tokens=150
