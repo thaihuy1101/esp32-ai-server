@@ -86,16 +86,20 @@ async def chat(request: Request):
         
         # Lọc các trường hợp im lặng bị Whisper ảo giác
         text_lower = user_text_raw.lower()
-        hallucinations = [
-            "xin chào", "cảm ơn", "tạm biệt", "hẹn gặp lại", 
-            "đăng ký kênh", "theo dõi", "subscribe", "subtitles", "chào các bạn"
-        ]
+        short_hallucinations = ["xin chào", "cảm ơn", "tạm biệt", "hẹn gặp lại", "chào các bạn"]
+        youtube_hallucinations = ["đăng ký kênh", "theo dõi", "subscribe", "subtitles", "la la school", "bỏ lỡ những video"]
         
-        # Nếu chuỗi quá ngắn hoặc nằm trong danh sách ảo giác phổ biến của Whisper
-        if len(user_text_raw) < 2 or any(h == text_lower.strip() or h in text_lower for h in hallucinations):
-            if len(user_text_raw) < 15: # Tránh lọc nhầm câu nói thật có chữ "xin chào" dài
-                print("[*] Bỏ qua vì phát hiện ảo giác âm thanh (im lặng).")
-                return Response(status_code=204) # 204 No Content
+        is_hallucination = False
+        if len(user_text_raw) < 2:
+            is_hallucination = True
+        elif len(user_text_raw) < 20 and any(h == text_lower.strip() or h in text_lower for h in short_hallucinations):
+            is_hallucination = True
+        elif any(h in text_lower for h in youtube_hallucinations):
+            is_hallucination = True
+            
+        if is_hallucination:
+            print("[*] Bỏ qua vì phát hiện ảo giác âm thanh (im lặng/ồn).")
+            return Response(status_code=204) # 204 No Content
         
         if not user_text_raw:
             return Response(status_code=204)

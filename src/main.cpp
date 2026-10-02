@@ -191,6 +191,7 @@ void drawEyes() {
   static bool needsRedraw = true;
   static bool isBlinking = false;
   static unsigned long blinkTime = 0;
+  static int lastPrintedMinute = -1;
 
   static float lastPrintedTemp = -999.0;
   static float lastPrintedHum = -999.0;
@@ -199,6 +200,7 @@ void drawEyes() {
   if (forceUIUpdate) {
     needsRedraw = true;
     isPanelRedrawNeeded = true;
+    lastPrintedMinute = -1;
     tft.fillScreen(COLOR_BG);
     forceUIUpdate = false;
   }
@@ -254,28 +256,50 @@ void drawEyes() {
     needsRedraw = false;
   }
 
-  // Vẽ Panel thông tin (2 dòng riêng biệt, có icon)
+  // Đồng hồ & Panel
+  struct tm timeinfo;
+  bool gotTime = getLocalTime(&timeinfo, 0);
+  if (gotTime && (timeinfo.tm_min != lastPrintedMinute || forceUIUpdate)) {
+      isPanelRedrawNeeded = true;
+  }
+
+  // Vẽ Panel thông tin kết hợp
   if (isPanelRedrawNeeded && currentTemp > 0.0) {
     lastPrintedTemp = currentTemp;
     lastPrintedHum = currentHum;
+    if (gotTime) lastPrintedMinute = timeinfo.tm_min;
+    
+    // Xóa nền khu vực đồng hồ cũ (Top center) phòng trường hợp vẫn còn lưu trên màn hình
+    tft.fillRect(70, 0, 100, 30, COLOR_BG);
     
     // Nền panel (Xám đậm)
     tft.fillRoundRect(10, 145, 220, 85, 12, 0x2104);
     
+    // --- DÒNG 1: ĐỒNG HỒ ---
+    if (gotTime) {
+      char timeStr[10];
+      strftime(timeStr, sizeof(timeStr), "%H:%M", &timeinfo);
+      tft.setFont(&FreeSans12pt7b);
+      tft.setTextColor(0xFFFF);
+      tft.setCursor(85, 175); // Canh giữa hàng 1
+      tft.print(timeStr);
+    }
+    
+    // --- DÒNG 2: NHIỆT ĐỘ & ĐỘ ẨM ---
     tft.setFont(&FreeSans9pt7b);
     
-    // --- DÒNG 1: NHIỆT ĐỘ ---
-    tft.fillCircle(40, 175, 7, 0xF800); // Bầu nhiệt kế (Đỏ)
-    tft.fillRoundRect(37, 158, 7, 17, 3, 0xF800); // Ống nhiệt kế
+    // Nhiệt độ bên trái
+    tft.fillCircle(25, 210, 7, 0xF800); // Bầu nhiệt kế
+    tft.fillRoundRect(22, 193, 7, 17, 3, 0xF800); // Ống nhiệt kế
     tft.setTextColor(0xFFE0); // Vàng
-    tft.setCursor(65, 175);
+    tft.setCursor(40, 215);
     tft.printf("%.1f C", currentTemp);
 
-    // --- DÒNG 2: ĐỘ ẨM ---
-    tft.fillCircle(40, 212, 7, 0x051D); // Giọt nước (Xanh dương)
-    tft.fillTriangle(33, 212, 47, 212, 40, 198, 0x051D);
+    // Độ ẩm bên phải
+    tft.fillCircle(135, 210, 7, 0x051D); // Giọt nước
+    tft.fillTriangle(128, 210, 142, 210, 135, 196, 0x051D);
     tft.setTextColor(0x07E0); // Xanh lá
-    tft.setCursor(65, 215);
+    tft.setCursor(150, 215);
     tft.printf("%.1f %%", currentHum);
   }
 }
@@ -438,6 +462,7 @@ void setup() {
   tft.fillScreen(COLOR_BG);
   printText("AI Assistant", 42, 100, COLOR_EYE, &FreeSans12pt7b);
   printText("Da ket noi mang!", 60, 130, COLOR_WHITE, &FreeSans9pt7b);
+  configTime(7 * 3600, 0, "pool.ntp.org", "time.nist.gov");
   
   // 1. Cài đặt I2S Loa (Dùng I2S_NUM_1)
   out = new AudioOutputI2S(1);
@@ -515,6 +540,10 @@ void loop() {
       }
       
       while (wav_index < MAX_WAV_SIZE + 44) {
+        if (millis() - listenStartTime > 1000 && digitalRead(TOUCH_PIN) == HIGH) {
+          timeout_occurred = true;
+          break;
+        }
         // Kiểm tra quá 15 giây không nói gì thì hủy (về ngủ)
         if (!started_talking && (millis() - listenStartTime > 15000)) {
           timeout_occurred = true;
@@ -634,6 +663,13 @@ void loop() {
                       long last_eq = 0;
                       long last_vol_check = 0;
                       while (mp3->isRunning()) {
+                          // Nhấn nút để bỏ qua / ngắt lời
+                          if (digitalRead(TOUCH_PIN) == HIGH) {
+                              mp3->stop();
+                              delay(500); // Tránh chạm nhầm 2 lần
+                              break;
+                          }
+                          
                           if (!mp3->loop()) {
                               mp3->stop();
                               break; 
