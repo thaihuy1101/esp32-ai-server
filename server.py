@@ -44,7 +44,7 @@ async def process_llm_and_tts(session_id: str, user_text: str):
         )
         
         response = await client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model="qwen/qwen3.8-27b",
             messages=[
                 {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": user_text}
