@@ -25,6 +25,8 @@ bool forceUIUpdate = true;
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <mbedtls/base64.h>
+#include <ArduinoJson.h>
+#include <AudioFileSourceHTTPStream.h>
 #include "huawei_logo.h"
 
 // --- Thông tin WiFi & Server ---
@@ -522,6 +524,9 @@ void loop() {
         tft.fillScreen(COLOR_BG);
         currentState = STATE_IDLE; forceUIUpdate = true;
         eyeHeight = 60;
+        
+        while(digitalRead(TOUCH_PIN) == HIGH) { delay(10); } // Đợi người dùng thả tay ra
+        delay(300); // Chống dội
         break;
       }
       
@@ -606,6 +611,8 @@ void loop() {
         free(wav_buffer);
         tft.fillScreen(COLOR_BG);
         currentState = STATE_IDLE; forceUIUpdate = true;
+        while(digitalRead(TOUCH_PIN) == HIGH) { delay(10); } // Wait for release
+        delay(300);
         break;
       }
 
@@ -634,93 +641,97 @@ void loop() {
       free(wav_buffer); // Giải phóng RAM ngay lập tức
       
       if (httpCode == HTTP_CODE_OK || httpCode == 200) {
-          String userB64 = http.header("X-User-Text");
-          String screenB64 = http.header("X-Screen-Text");
+          String payload = http.getString();
+          http.end(); // Kết thúc kết nối POST
           
-          String userText = decodeBase64(userB64);
-          String screenText = decodeBase64(screenB64);
+          // Parse JSON
+          DynamicJsonDocument doc(1024);
+          DeserializationError error = deserializeJson(doc, payload);
+          if (error) {
+              Serial.print(F("deserializeJson() failed: "));
+              Serial.println(error.f_str());
+          }
+          
+          String userText = doc["user_text"].as<String>();
+          String sessionId = doc["session_id"].as<String>();
           
           if (userText.length() == 0) userText = "Khong nghe ro";
-          if (screenText.length() == 0) screenText = "Loi may chu";
           
-          lastAiTextGlobal = screenText;
-          
-          // Vẽ giao diện chat
+          // Vẽ giao diện
           tft.fillScreen(COLOR_BG);
-          lastAiTextGlobal = screenText.c_str();
-          drawListeningUI(lastAiTextGlobal.c_str(), "+ Live");
-          
-          // Phát MP3
-          String payload = http.getString();
-          uint32_t len = payload.length();
-          if (len > 0) {
-              uint8_t* mp3_buffer = (uint8_t*)ps_malloc(len);
-              if (mp3_buffer) {
-                  memcpy(mp3_buffer, payload.c_str(), len);
-                  
-                  AudioFileSourcePROGMEM *ramFile = new AudioFileSourcePROGMEM(mp3_buffer, len);
-                  if (mp3->begin(ramFile, out)) {
-                      long last_eq = 0;
-                      long last_vol_check = 0;
-                      while (mp3->isRunning()) {
-                          // Nhấn nút để bỏ qua / ngắt lời
-                          if (digitalRead(TOUCH_PIN) == HIGH) {
-                              mp3->stop();
-                              delay(500); // Tránh chạm nhầm 2 lần
-                              break;
-                          }
-                          
-                          if (!mp3->loop()) {
-                              mp3->stop();
-                              break; 
-                          }
-                          
-                          // Cập nhật âm lượng từ biến trở mỗi 100ms
-                          if (USE_POTENTIOMETER && millis() - last_vol_check > 100) {
-                              last_vol_check = millis();
-                              int potValue = analogRead(POT_PIN);
-                              // Map từ 0-4095 sang 0.0 - 1.5 (Gain tối đa 1.5 lần)
-                              float gain = (float)potValue / 4095.0 * 1.5;
-                              out->SetGain(gain);
-                          }
-                          
-                          if (millis() - last_eq > 50) {
-                              last_eq = millis();
-                              drawEQBars(random(1000, 4500));
-                          }
-                          delay(1);
-                      }
-                      out->stop(); // Nhường I2S cho Micro
-                  }
-                  delete ramFile;
-                  free(mp3_buffer);
-              }
-          }
+          drawListeningUI("Dang suy nghi...", "+ Live");
           
           String uLow = String(userText); uLow.toLowerCase();
-          String sLow = String(screenText.c_str()); sLow.toLowerCase();
+          bool cancelled_speech = false;
           
-          if (uLow.indexOf("tam biet") >= 0 || uLow.indexOf("cam on") >= 0 || 
-              sLow.indexOf("tam biet") >= 0 || sLow.indexOf("cam on") >= 0) {
-              tft.fillScreen(COLOR_BG); 
-              currentState = STATE_IDLE; forceUIUpdate = true; 
-          } else {
-              delay(200); 
-              currentState = STATE_LISTENING; 
+          // Nếu người dùng chủ động chào tạm biệt
+          if (uLow.indexOf("tam biet") >= 0 || uLow.indexOf("tạm biệt") >= 0 || uLow.indexOf("cam on") >= 0 || uLow.indexOf("cảm ơn") >= 0) {
+              tft.fillScreen(COLOR_BG);
+              currentState = STATE_IDLE; forceUIUpdate = true;
+              break;
           }
+          
+          // Stream thẳng Audio từ Server (Vừa nghĩ vừa nói)
+          String streamUrl = "https://esp32-ai.onrender.com/stream/" + sessionId;
+          Serial.println("Streaming URL: " + streamUrl);
+          
+          AudioFileSourceHTTPStream *file = new AudioFileSourceHTTPStream(streamUrl.c_str());
+          if (mp3->begin(file, out)) {
+              long last_eq = 0;
+              long last_vol_check = 0;
+              while (mp3->isRunning()) {
+                  if (digitalRead(TOUCH_PIN) == HIGH) {
+                      mp3->stop();
+                      while(digitalRead(TOUCH_PIN) == HIGH) { delay(10); } // Đợi thả tay
+                      delay(300);
+                      cancelled_speech = true;
+                      break;
+                  }
+                  
+                  if (!mp3->loop()) {
+                      mp3->stop();
+                      break; 
+                  }
+                  
+                  if (USE_POTENTIOMETER && millis() - last_vol_check > 100) {
+                      last_vol_check = millis();
+                      int potValue = analogRead(POT_PIN);
+                      float gain = (float)potValue / 4095.0 * 1.5;
+                      out->SetGain(gain);
+                  }
+                  
+                  if (millis() - last_eq > 50) {
+                      last_eq = millis();
+                      drawEQBars(random(1000, 4500));
+                  }
+                  delay(1);
+              }
+              out->stop();
+          }
+          delete file;
+          
+          if (cancelled_speech) {
+              tft.fillScreen(COLOR_BG);
+              currentState = STATE_IDLE; forceUIUpdate = true;
+          } else {
+              delay(200);
+              currentState = STATE_LISTENING; // Lắng nghe tiếp
+          }
+          
       } else if (httpCode == 204) {
-          // Im lặng, máy chủ bỏ qua (ảo giác âm thanh)
+          // Im lặng
           Serial.println("Silence detected, server returned 204.");
           currentState = STATE_IDLE; forceUIUpdate = true;
           eyeHeight = 60;
+          http.end();
       } else {
           tft.fillScreen(COLOR_BG);
           drawChatUI("Loi ket noi Server", String(httpCode).c_str());
           delay(3000);
           currentState = STATE_IDLE; forceUIUpdate = true;
           eyeHeight = 60;
+          http.end();
       }
-      http.end();
       break;
     }
   }

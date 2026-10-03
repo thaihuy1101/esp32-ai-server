@@ -7,3 +7,5 @@ starlette==0.38.6
 groq
 edge-tts
 httpx
+requests
+python-multipart

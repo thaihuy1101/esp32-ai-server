@@ -1,170 +1,176 @@
 import os
-import io
-import base64
-from fastapi import FastAPI, Request, Response
-from groq import Groq
-import uvicorn
-import datetime
-import unicodedata
-import httpx
+import uuid
+import asyncio
+import re
+import requests
+from fastapi import FastAPI, UploadFile, File, BackgroundTasks
+from fastapi.responses import JSONResponse, StreamingResponse, Response
 import edge_tts
+from groq import AsyncGroq
 
 app = FastAPI()
 
-# --- CẤU HÌNH GROQ API KEY ---
+# Môi trường Groq API
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-if not GROQ_API_KEY:
-    print("[!] CẢNH BÁO: Chưa cấu hình GROQ_API_KEY trong Environment Variables!")
+client = AsyncGroq(api_key=GROQ_API_KEY)
 
-try:
-    client = Groq(api_key=GROQ_API_KEY)
-    print("[*] Groq API khởi tạo thành công!")
-except Exception as e:
-    print(f"[!] Lỗi khởi tạo Groq: {e}")
+# Dict lưu trữ hàng đợi âm thanh cho mỗi session
+audio_queues = {}
 
-chat_history = []
-
-def remove_accents(input_str):
-    nfkd = unicodedata.normalize('NFKD', input_str)
-    res = "".join([c for c in nfkd if not unicodedata.combining(c)])
-    return res.replace('đ', 'd').replace('Đ', 'D')
-
-def parse_weather(code):
-    if code == 0: return "trời trong xanh, không mây"
-    if code in [1,2,3]: return "trời có mây"
-    if code in [45,48]: return "có sương mù"
-    if code in [51,53,55,56,57]: return "có mưa bay, lất phất"
-    if code in [61,63,65,66,67,80,81,82]: return "có mưa rào"
-    if code in [95,96,99]: return "có giông bão, sấm sét"
-    return "thời tiết khá ổn"
-
-async def get_real_weather():
-    # Lấy thời tiết thực tế tại Biên Hòa, Đồng Nai
+def get_weather_info():
     try:
-        async with httpx.AsyncClient() as http_client:
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-            resp = await http_client.get("https://api.open-meteo.com/v1/forecast?latitude=10.9482&longitude=106.8283&current_weather=true", headers=headers, timeout=10.0)
-            data = resp.json()
-            cw = data["current_weather"]
-            temp = cw["temperature"]
-            condition = parse_weather(cw["weathercode"])
-            return f"{temp}°C, {condition}"
+        # Lấy thời tiết Bắc Tân Uyên, Bình Dương
+        lat, lon = 11.0827, 106.8457
+        url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
+        headers = {'User-Agent': 'ESP32-AI-Assistant/1.0'}
+        response = requests.get(url, headers=headers, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            temp = data['current_weather']['temperature']
+            return f"Thời tiết thực tế ngoài trời tại Bắc Tân Uyên hiện tại là {temp} độ C."
     except Exception as e:
-        print(f"[!] Lỗi khi lấy thời tiết ngoài trời: {e}")
-        return "không lấy được dữ liệu"
+        print("Lỗi thời tiết:", e)
+    return "Không thể lấy thông tin thời tiết lúc này."
+
+async def process_llm_and_tts(session_id: str, user_text: str):
+    buffer = ""
+    split_chars = {'.', '!', '?', '\n', ';'}
+    
+    try:
+        weather_context = get_weather_info()
+        sys_prompt = (
+            f"Bạn là trợ lý ảo Qwen AI. Hãy trả lời ngắn gọn, tự nhiên, bằng tiếng Việt. "
+            f"Thông tin thời tiết: {weather_context}"
+        )
+        
+        response = await client.chat.completions.create(
+            model="qwen-2.5-32b",
+            messages=[
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_text}
+            ],
+            stream=True,
+            temperature=0.7,
+            max_tokens=200
+        )
+        
+        async for chunk in response:
+            delta = chunk.choices[0].delta.content
+            if delta:
+                buffer += delta
+                
+                # Split buffer by punctuation marks to stream out complete sentences
+                matches = list(re.finditer(r'([.!?:;\n]+)', buffer))
+                if matches:
+                    last_match = matches[-1]
+                    split_idx = last_match.end()
+                    
+                    complete_sentences = buffer[:split_idx].strip()
+                    buffer = buffer[split_idx:]
+                    
+                    if complete_sentences:
+                        communicate = edge_tts.Communicate(complete_sentences, "vi-VN-HoaiMyNeural")
+                        async for tts_chunk in communicate.stream():
+                            if tts_chunk["type"] == "audio":
+                                await audio_queues[session_id].put(tts_chunk["data"])
+                                
+        # Flush the remaining buffer if any
+        if buffer.strip():
+            communicate = edge_tts.Communicate(buffer.strip(), "vi-VN-HoaiMyNeural")
+            async for tts_chunk in communicate.stream():
+                if tts_chunk["type"] == "audio":
+                    await audio_queues[session_id].put(tts_chunk["data"])
+                    
+    except Exception as e:
+        print(f"Lỗi AI/TTS: {e}")
+    finally:
+        # Bắn tín hiệu kết thúc luồng (EOF)
+        if session_id in audio_queues:
+            await audio_queues[session_id].put(None)
 
 @app.post("/chat")
-async def chat(request: Request):
-    global chat_history
-    
-    wav_bytes = await request.body()
-    print(f"[*] Đã nhận {len(wav_bytes)} bytes âm thanh từ ESP32.")
-    
-    if len(wav_bytes) == 0:
-        return Response(status_code=400, content="Không có dữ liệu âm thanh")
-
+async def chat_endpoint(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    # 1. Lưu file WAV tạm thời
+    audio_content = await file.read()
+    temp_file_path = f"temp_{uuid.uuid4().hex}.wav"
+    with open(temp_file_path, "wb") as f:
+        f.write(audio_content)
+        
+    user_text_raw = ""
     try:
-        days = ["Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy", "Chủ Nhật"]
-        now_dt = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
-        now_str = f"{now_dt.strftime('%H:%M')} {days[now_dt.weekday()]} ngày {now_dt.strftime('%d/%m/%Y')}"
-        
-        # Dữ liệu từ ESP32 (Phòng)
-        temp_str = request.headers.get("X-Temperature", "Không xác định")
-        hum_str = request.headers.get("X-Humidity", "Không xác định")
-        
-        # Dữ liệu ngoài trời thực tế
-        outdoor_weather = await get_real_weather()
-        
-        print("[*] Đang nhận diện giọng nói bằng Whisper...")
-        transcription = client.audio.transcriptions.create(
-            file=("audio.wav", wav_bytes, "audio/wav"),
-            model="whisper-large-v3",
-            language="vi",
-        )
+        # 2. Gửi cho Whisper giải mã
+        with open(temp_file_path, "rb") as f:
+            transcription = await client.audio.transcriptions.create(
+                file=(temp_file_path, f.read()),
+                model="whisper-large-v3",
+                prompt="Đây là tiếng Việt.",
+                language="vi"
+            )
         user_text_raw = transcription.text.strip()
-        print(f"[*] Người dùng nói: {user_text_raw}")
-        
-        # Lọc các trường hợp im lặng bị Whisper ảo giác
-        text_lower = user_text_raw.lower()
-        short_hallucinations = ["xin chào", "cảm ơn", "tạm biệt", "hẹn gặp lại", "chào các bạn"]
-        youtube_hallucinations = ["đăng ký kênh", "theo dõi", "subscribe", "subtitles", "la la school", "bỏ lỡ những video"]
-        
-        is_hallucination = False
-        if len(user_text_raw) < 2:
-            is_hallucination = True
-        elif len(user_text_raw) < 20 and any(h == text_lower.strip() or h in text_lower for h in short_hallucinations):
-            is_hallucination = True
-        elif any(h in text_lower for h in youtube_hallucinations):
-            is_hallucination = True
-            
-        if is_hallucination:
-            print("[*] Bỏ qua vì phát hiện ảo giác âm thanh (im lặng/ồn).")
-            return Response(status_code=204) # 204 No Content
-        
-        if not user_text_raw:
-            return Response(status_code=204)
-            
-        system_prompt = (
-            f"Bạn là trợ lý ảo AI thông minh, vui tính và đáng yêu.\n"
-            f"THÔNG TIN QUAN TRỌNG ĐỂ TRẢ LỜI:\n"
-            f"- Thời gian hiện tại: {now_str}\n"
-            f"- Vị trí của người dùng: Biên Hòa, Đồng Nai.\n"
-            f"- Nhiệt độ TRONG PHÒNG hiện tại: {temp_str}°C, Độ ẩm: {hum_str}%.\n"
-            f"- Thời tiết NGOÀI TRỜI thực tế: {outdoor_weather}.\n"
-            f"Quy tắc:\n"
-            f"1. Trả lời ngắn gọn, tự nhiên, giống người thật, tối đa 3-4 câu.\n"
-            f"2. KHÔNG dùng các ký tự đặc biệt như *, #. KHÔNG thêm các từ như 'vâng', 'dạ' quá nhiều gây nhàm chán.\n"
-            f"3. Nếu hỏi về thời tiết ngoài trời, hãy dùng dữ liệu 'Thời tiết NGOÀI TRỜI thực tế' để trả lời.\n"
-        )
-        
-        messages = [{"role": "system", "content": system_prompt}]
-        for chat_msg in chat_history:
-            messages.append({"role": chat_msg["role"], "content": chat_msg["content"]})
-        messages.append({"role": "user", "content": user_text_raw})
-        
-        print("[*] Đang gửi lên Groq Qwen...")
-        completion = client.chat.completions.create(
-            model="qwen/qwen3.8-27b",
-            messages=messages,
-            temperature=0.7,
-            max_tokens=150
-        )
-        
-        tts_text = completion.choices[0].message.content.strip()
-        print(f"[*] Qwen phản hồi: {tts_text}")
-        
-        chat_history.append({"role": "user", "content": user_text_raw})
-        chat_history.append({"role": "assistant", "content": tts_text})
-        if len(chat_history) > 10: 
-            chat_history = chat_history[-10:]
-            
-        screen_text = remove_accents(tts_text)
-        user_text = remove_accents(user_text_raw)
-            
-        print("[*] Đang tạo giọng nói MP3 (Microsoft Edge TTS - Giọng Hoài My)...")
-        # Sử dụng giọng Hoài My (Nữ, Miền Nam, Nghe rất tự nhiên và nhanh)
-        communicate = edge_tts.Communicate(tts_text, "vi-VN-HoaiMyNeural")
-        
-        mp3_bytes = b""
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                mp3_bytes += chunk["data"]
-        
-        user_b64 = base64.b64encode(user_text.encode('utf-8')).decode('utf-8')
-        screen_b64 = base64.b64encode(screen_text.encode('utf-8')).decode('utf-8')
-        
-        headers = {
-            "X-User-Text": user_b64,
-            "X-Screen-Text": screen_b64
-        }
-        
-        print("[*] Gửi trả MP3 về ESP32 thành công!\n")
-        return Response(content=mp3_bytes, media_type="audio/mpeg", headers=headers)
-
     except Exception as e:
-        print(f"[!] LỖI SERVER: {e}")
-        return Response(status_code=500, content=str(e))
+        print("Lỗi Whisper:", e)
+        return Response(status_code=500)
+    finally:
+        if os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
 
-if __name__ == "__main__":
-    print("🚀 Bắt đầu khởi động AI Server (Groq + Edge TTS) tại cổng 8000...")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # 3. Bộ lọc ảo giác
+    text_lower = user_text_raw.lower()
+    short_hallucinations = ["xin chào", "cảm ơn", "tạm biệt", "hẹn gặp lại", "chào các bạn"]
+    youtube_hallucinations = ["đăng ký kênh", "theo dõi", "subscribe", "subtitles", "la la school", "bỏ lỡ những video"]
+    
+    is_hallucination = False
+    if len(user_text_raw) < 2:
+        is_hallucination = True
+    elif len(user_text_raw) < 20 and any(h == text_lower.strip() or h in text_lower for h in short_hallucinations):
+        is_hallucination = True
+    elif any(h in text_lower for h in youtube_hallucinations):
+        is_hallucination = True
+        
+    if is_hallucination:
+        print(f"[*] Ảo giác: {user_text_raw}")
+        return Response(status_code=204) 
+    
+    if not user_text_raw:
+        return Response(status_code=204)
+        
+    print(f"[*] User nói: {user_text_raw}")
+
+    # 4. Khởi tạo phiên Streaming
+    session_id = str(uuid.uuid4())
+    audio_queues[session_id] = asyncio.Queue()
+    
+    # Kích hoạt tiến trình chạy ngầm: LLM nghĩ -> TTS tạo giọng -> Bơm vào Queue
+    background_tasks.add_task(process_llm_and_tts, session_id, user_text_raw)
+    
+    # 5. Trả về kết quả ngay lập tức cho ESP32
+    return JSONResponse(content={
+        "session_id": session_id,
+        "user_text": user_text_raw
+    })
+
+async def audio_streamer(session_id: str):
+    queue = audio_queues.get(session_id)
+    if not queue:
+        return
+        
+    try:
+        while True:
+            chunk = await queue.get()
+            if chunk is None:
+                break
+            yield chunk
+    finally:
+        # Xóa phiên sau khi stream xong
+        audio_queues.pop(session_id, None)
+
+@app.get("/stream/{session_id}")
+async def stream_endpoint(session_id: str):
+    if session_id not in audio_queues:
+        return Response(status_code=404)
+    # Stream chunk âm thanh trả về ESP32
+    return StreamingResponse(audio_streamer(session_id), media_type="audio/mpeg")
+
+@app.get("/")
+def read_root():
+    return {"status": "ok", "message": "ESP32 Streaming Server is running v2.0"}
