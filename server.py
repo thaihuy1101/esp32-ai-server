@@ -116,7 +116,7 @@ async def chat_endpoint(request: Request, background_tasks: BackgroundTasks):
 
     # 3. Bộ lọc ảo giác
     text_lower = user_text_raw.lower()
-    short_hallucinations = ["xin chào", "cảm ơn", "tạm biệt", "hẹn gặp lại", "chào các bạn"]
+    short_hallucinations = []
     youtube_hallucinations = ["đăng ký kênh", "theo dõi", "subscribe", "subtitles", "la la school", "bỏ lỡ những video"]
     
     is_hallucination = False
