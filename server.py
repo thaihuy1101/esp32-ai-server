@@ -3,7 +3,7 @@ import uuid
 import asyncio
 import re
 import requests
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks
+from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import JSONResponse, StreamingResponse, Response
 import edge_tts
 from groq import AsyncGroq
@@ -89,9 +89,9 @@ async def process_llm_and_tts(session_id: str, user_text: str):
             await audio_queues[session_id].put(None)
 
 @app.post("/chat")
-async def chat_endpoint(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+async def chat_endpoint(request: Request, background_tasks: BackgroundTasks):
     # 1. Lưu file WAV tạm thời
-    audio_content = await file.read()
+    audio_content = await request.body()
     temp_file_path = f"temp_{uuid.uuid4().hex}.wav"
     with open(temp_file_path, "wb") as f:
         f.write(audio_content)
