@@ -17,26 +17,41 @@ client = AsyncGroq(api_key=GROQ_API_KEY)
 # Dict lưu trữ hàng đợi âm thanh cho mỗi session
 audio_queues = {}
 
-def get_weather_info():
+def get_weather_info(ip: str):
     try:
-        # Lấy thời tiết Bắc Tân Uyên, Bình Dương
+        # Lấy vị trí từ IP
+        loc_resp = requests.get(f"http://ip-api.com/json/{ip}", timeout=3)
         lat, lon = 11.0827, 106.8457
+        city = "Bắc Tân Uyên"
+        
+        if loc_resp.status_code == 200:
+            loc_data = loc_resp.json()
+            if loc_data.get('status') == 'success':
+                lat = loc_data.get('lat', lat)
+                lon = loc_data.get('lon', lon)
+                city = loc_data.get('city', city)
+        
+        # Lấy thời tiết
         url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
         headers = {'User-Agent': 'ESP32-AI-Assistant/1.0'}
         response = requests.get(url, headers=headers, timeout=5)
         if response.status_code == 200:
             data = response.json()
             temp = data['current_weather']['temperature']
-            return f"Thời tiết thực tế ngoài trời tại Bắc Tân Uyên hiện tại là {temp} độ C."
+            return f"Thời tiết thực tế ngoài trời tại {city} hiện tại là {temp} độ C."
     except Exception as e:
         print("Lỗi thời tiết:", e)
     return "Không thể lấy thông tin thời tiết lúc này."
 
-async def process_llm_and_tts(session_id: str, user_text: str, room_temp: str, room_hum: str):
+async def process_llm_and_tts(session_id: str, user_text: str, room_temp: str, room_hum: str, client_ip: str):
     try:
-        weather_context = get_weather_info()
+        weather_context = get_weather_info(client_ip)
         sys_prompt = (
-            f"Bạn là trợ lý ảo AI thông minh, vui vẻ và ngắn gọn. Hãy trả lời ngắn gọn, tự nhiên, bằng tiếng Việt. "
+            f"Bạn là người bạn tâm giao, nói chuyện cực kỳ tự nhiên, vui vẻ, hài hước. "
+            f"LUÔN xưng 'mình' và gọi người dùng là 'bạn' (hoặc xưng hô linh hoạt theo cách người dùng gọi). "
+            f"QUAN TRỌNG: Hãy luôn mở đầu câu trả lời bằng một từ đệm như 'Dạ', 'À', 'Ừm', 'Ồ' để câu nói tự nhiên hơn. "
+            f"Để giữ cuộc trò chuyện tiếp diễn, thỉnh thoảng hãy chủ động đặt một câu hỏi mở ngắn gọn ở cuối câu trả lời. "
+            f"Tuyệt đối không nói dài dòng văn tự, trả lời ngắn gọn như đang nhắn tin với bạn thân. "
             f"Thông tin thời tiết ngoài trời: {weather_context} "
             f"Nhiệt độ phòng hiện tại: {room_temp}°C, Độ ẩm: {room_hum}%."
         )
@@ -120,9 +135,10 @@ async def chat_endpoint(request: Request, background_tasks: BackgroundTasks):
     
     room_temp = request.headers.get("x-temperature", request.headers.get("X-Temperature", "Không rõ"))
     room_hum = request.headers.get("x-humidity", request.headers.get("X-Humidity", "Không rõ"))
+    client_ip = request.client.host if request.client else ""
     
     # Kích hoạt tiến trình chạy ngầm
-    background_tasks.add_task(process_llm_and_tts, session_id, user_text_raw, room_temp, room_hum)
+    background_tasks.add_task(process_llm_and_tts, session_id, user_text_raw, room_temp, room_hum, client_ip)
     
     # 5. Trả về kết quả ngay lập tức cho ESP32
     return JSONResponse(content={

@@ -26,7 +26,8 @@ bool forceUIUpdate = true;
 #include <WiFiClientSecure.h>
 #include <mbedtls/base64.h>
 #include <ArduinoJson.h>
-#include <AudioFileSourceHTTPStream.h>
+#include "AudioFileSourceHTTPSStream.h"
+#include <AudioFileSourceBuffer.h>
 #include "huawei_logo.h"
 
 // --- Thông tin WiFi & Server ---
@@ -545,10 +546,7 @@ void loop() {
       }
       
       while (wav_index < MAX_WAV_SIZE + 44) {
-        if (millis() - listenStartTime > 1000 && digitalRead(TOUCH_PIN) == HIGH) {
-          timeout_occurred = true;
-          break;
-        }
+
         // Kiểm tra quá 15 giây không nói gì thì hủy (về ngủ)
         if (!started_talking && (millis() - listenStartTime > 15000)) {
           timeout_occurred = true;
@@ -581,11 +579,7 @@ void loop() {
         // --- Hiệu ứng Music Visualizer (Fake FFT EQ Bars) ---
         drawEQBars(energy);
         
-        // CHẠM ĐỂ NGẮT SỚM: Nếu người dùng chạm cảm biến lần nữa thì chốt đơn luôn
-        if (digitalRead(TOUCH_PIN) == HIGH && (millis() - listenStartTime > 1000)) {
-          started_talking = true; // Bắt buộc ghi nhận là có nói để gửi lên server
-          break;
-        }
+
 
         if (energy > 2500) { // Giảm ngưỡng xuống 2500 để dễ nhận diện tiếng người hơn
           noise_frames++;
@@ -672,11 +666,12 @@ void loop() {
           }
           
           // Stream thẳng Audio từ Server (Vừa nghĩ vừa nói)
-          String streamUrl = "https://esp32-ai.onrender.com/stream/" + sessionId;
+          String streamUrl = SERVER_URL.substring(0, SERVER_URL.lastIndexOf("/")) + "/stream/" + sessionId;
           Serial.println("Streaming URL: " + streamUrl);
           
-          AudioFileSourceHTTPStream *file = new AudioFileSourceHTTPStream(streamUrl.c_str());
-          if (mp3->begin(file, out)) {
+          AudioFileSourceHTTPSStream *file = new AudioFileSourceHTTPSStream(streamUrl.c_str());
+          AudioFileSourceBuffer *buff = new AudioFileSourceBuffer(file, 4096);
+          if (mp3->begin(buff, out)) {
               long last_eq = 0;
               long last_vol_check = 0;
               while (mp3->isRunning()) {
@@ -708,6 +703,7 @@ void loop() {
               }
               out->stop();
           }
+          delete buff;
           delete file;
           
           if (cancelled_speech) {
