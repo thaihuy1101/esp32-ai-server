@@ -32,15 +32,13 @@ def get_weather_info():
         print("Lỗi thời tiết:", e)
     return "Không thể lấy thông tin thời tiết lúc này."
 
-async def process_llm_and_tts(session_id: str, user_text: str):
-    buffer = ""
-    split_chars = {'.', '!', '?', '\n', ';'}
-    
+async def process_llm_and_tts(session_id: str, user_text: str, room_temp: str, room_hum: str):
     try:
         weather_context = get_weather_info()
         sys_prompt = (
-            f"Bạn là trợ lý ảo Qwen AI. Hãy trả lời ngắn gọn, tự nhiên, bằng tiếng Việt. "
-            f"Thông tin thời tiết: {weather_context}"
+            f"Bạn là trợ lý ảo AI thông minh, vui vẻ và ngắn gọn. Hãy trả lời ngắn gọn, tự nhiên, bằng tiếng Việt. "
+            f"Thông tin thời tiết ngoài trời: {weather_context} "
+            f"Nhiệt độ phòng hiện tại: {room_temp}°C, Độ ẩm: {room_hum}%."
         )
         
         response = await client.chat.completions.create(
@@ -49,34 +47,14 @@ async def process_llm_and_tts(session_id: str, user_text: str):
                 {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": user_text}
             ],
-            stream=True,
+            stream=False,
             temperature=0.7,
             max_tokens=200
         )
         
-        async for chunk in response:
-            delta = chunk.choices[0].delta.content
-            if delta:
-                buffer += delta
-                
-                # Split buffer by punctuation marks to stream out complete sentences
-                matches = list(re.finditer(r'([.!?:;\n]+)', buffer))
-                if matches:
-                    last_match = matches[-1]
-                    split_idx = last_match.end()
-                    
-                    complete_sentences = buffer[:split_idx].strip()
-                    buffer = buffer[split_idx:]
-                    
-                    if complete_sentences:
-                        communicate = edge_tts.Communicate(complete_sentences, "vi-VN-HoaiMyNeural")
-                        async for tts_chunk in communicate.stream():
-                            if tts_chunk["type"] == "audio":
-                                await audio_queues[session_id].put(tts_chunk["data"])
-                                
-        # Flush the remaining buffer if any
-        if buffer.strip():
-            communicate = edge_tts.Communicate(buffer.strip(), "vi-VN-HoaiMyNeural")
+        full_text = response.choices[0].message.content
+        if full_text:
+            communicate = edge_tts.Communicate(full_text.strip(), "vi-VN-HoaiMyNeural")
             async for tts_chunk in communicate.stream():
                 if tts_chunk["type"] == "audio":
                     await audio_queues[session_id].put(tts_chunk["data"])
@@ -140,8 +118,11 @@ async def chat_endpoint(request: Request, background_tasks: BackgroundTasks):
     session_id = str(uuid.uuid4())
     audio_queues[session_id] = asyncio.Queue()
     
-    # Kích hoạt tiến trình chạy ngầm: LLM nghĩ -> TTS tạo giọng -> Bơm vào Queue
-    background_tasks.add_task(process_llm_and_tts, session_id, user_text_raw)
+    room_temp = request.headers.get("X-Temperature", "Không rõ")
+    room_hum = request.headers.get("X-Humidity", "Không rõ")
+    
+    # Kích hoạt tiến trình chạy ngầm
+    background_tasks.add_task(process_llm_and_tts, session_id, user_text_raw, room_temp, room_hum)
     
     # 5. Trả về kết quả ngay lập tức cho ESP32
     return JSONResponse(content={
