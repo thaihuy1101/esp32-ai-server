@@ -130,27 +130,23 @@ async def chat_endpoint(request: Request, background_tasks: BackgroundTasks):
         "user_text": user_text_raw
     })
 
-async def audio_streamer(session_id: str):
+@app.get("/stream/{session_id}")
+async def stream_endpoint(session_id: str):
     queue = audio_queues.get(session_id)
     if not queue:
-        return
+        return Response(status_code=404)
         
+    full_audio = bytearray()
     try:
         while True:
             chunk = await queue.get()
             if chunk is None:
                 break
-            yield chunk
+            full_audio.extend(chunk)
     finally:
-        # Xóa phiên sau khi stream xong
         audio_queues.pop(session_id, None)
-
-@app.get("/stream/{session_id}")
-async def stream_endpoint(session_id: str):
-    if session_id not in audio_queues:
-        return Response(status_code=404)
-    # Stream chunk âm thanh trả về ESP32
-    return StreamingResponse(audio_streamer(session_id), media_type="audio/mpeg")
+        
+    return Response(content=bytes(full_audio), media_type="audio/mpeg")
 
 @app.get("/")
 def read_root():
