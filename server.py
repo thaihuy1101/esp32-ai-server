@@ -118,8 +118,8 @@ async def chat_endpoint(request: Request, background_tasks: BackgroundTasks):
     session_id = str(uuid.uuid4())
     audio_queues[session_id] = asyncio.Queue()
     
-    room_temp = request.headers.get("X-Temperature", "Không rõ")
-    room_hum = request.headers.get("X-Humidity", "Không rõ")
+    room_temp = request.headers.get("x-temperature", request.headers.get("X-Temperature", "Không rõ"))
+    room_hum = request.headers.get("x-humidity", request.headers.get("X-Humidity", "Không rõ"))
     
     # Kích hoạt tiến trình chạy ngầm
     background_tasks.add_task(process_llm_and_tts, session_id, user_text_raw, room_temp, room_hum)
